@@ -69,6 +69,10 @@ static void netsh_ifconfig(const struct tuntap_options *to,
                            const in_addr_t netmask,
                            const unsigned int flags);
 
+static void windows_set_mtu(const int iface_index,
+                            const short family,
+                            const int mtu);
+
 static void netsh_set_dns6_servers(const struct in6_addr *addr_list,
                                    const int addr_len,
                                    const char *flex_name);
@@ -203,6 +207,48 @@ do_dns6_service(bool add, const struct tuntap *tt)
 
     msg(M_INFO, "IPv6 dns servers %s using service", (add ? "set" : "deleted"));
     ret = true;
+
+out:
+    gc_free(&gc);
+    return ret;
+}
+
+static bool
+do_set_mtu_service(const struct tuntap *tt, const short family, const int mtu)
+{
+    DWORD len;
+    bool ret = false;
+    ack_message_t ack;
+    struct gc_arena gc = gc_new();
+    HANDLE pipe = tt->options.msg_channel;
+    const char *family_name = (family == AF_INET6) ? "IPv6" : "IPv4";
+    set_mtu_message_t mtu_msg = {
+        .header = {
+            msg_set_mtu,
+            sizeof(set_mtu_message_t),
+            0
+        },
+        .iface = {.index = tt->adapter_index,.name = tt->actual_name },
+        .mtu = mtu,
+        .family = family
+    };
+
+    if (!WriteFile(pipe, &mtu_msg, sizeof(mtu_msg), &len, NULL)
+        || !ReadFile(pipe, &ack, sizeof(ack), &len, NULL))
+    {
+        goto out;
+    }
+
+    if (ack.error_number != NO_ERROR)
+    {
+        msg(M_NONFATAL, "TUN: setting %s mtu using service failed: %s [status=%u if_index=%d]",
+            family_name, strerror_win32(ack.error_number, &gc), ack.error_number, mtu_msg.iface.index);
+    }
+    else
+    {
+        msg(M_INFO, "%s MTU set to %d on interface %d using service", family_name, mtu, mtu_msg.iface.index);
+        ret = true;
+    }
 
 out:
     gc_free(&gc);
@@ -1563,6 +1609,15 @@ do_ifconfig(struct tuntap *tt,
             tt->did_ifconfig = true;
         }
 
+        if (tt->options.msg_channel)
+        {
+            do_set_mtu_service(tt, AF_INET, tun_mtu);
+        }
+        else
+        {
+            windows_set_mtu(tt->adapter_index, AF_INET, tun_mtu);
+        }
+
         if (do_ipv6)
         {
             if (tt->options.ip_win32_type == IPW32_SET_MANUAL)
@@ -1575,6 +1630,7 @@ do_ifconfig(struct tuntap *tt,
             {
                 do_address_service(true, AF_INET6, tt);
                 do_dns6_service(true, tt);
+                do_set_mtu_service(tt, AF_INET6, tun_mtu);
             }
             else
             {
@@ -1590,6 +1646,7 @@ do_ifconfig(struct tuntap *tt,
                 netsh_command(&argv, 4, M_FATAL);
                 /* set ipv6 dns servers if any are specified */
                 netsh_set_dns6_servers(tt->options.dns6, tt->options.dns6_len, actual);
+                windows_set_mtu(tt->adapter_index, AF_INET6, tun_mtu);
             }
 
             /* explicit route needed */
@@ -1749,7 +1806,7 @@ open_tun_generic(const char *dev, const char *dev_type, const char *dev_node,
              * where n = [0, 255].
              */
 #ifdef TARGET_NETBSD
-            /* on NetBSD, tap (but not tun) devices are opened by
+            /* on NetBSD, tap (but not tun) devices are opened bydo_ifconfig_ipv4
              * opening /dev/tap and then querying the system about the
              * actual device name (tap0, tap1, ...) assigned
              */
@@ -5411,6 +5468,39 @@ service_enable_dhcp(const struct tuntap *tt)
 out:
     gc_free(&gc);
     return ret;
+}
+
+static void
+windows_set_mtu(const int iface_index, const short family,
+                const int mtu)
+{
+    DWORD err = 0;
+    struct gc_arena gc = gc_new();
+    MIB_IPINTERFACE_ROW ipiface;
+    InitializeIpInterfaceEntry(&ipiface);
+    const char *family_name = (family == AF_INET6) ? "IPv6" : "IPv4";
+    ipiface.Family = family;
+    ipiface.InterfaceIndex = iface_index;
+    err = GetIpInterfaceEntry(&ipiface);
+    if (err == NO_ERROR)
+    {
+        if (family == AF_INET)
+        {
+            ipiface.SitePrefixLength = 0;
+        }
+        ipiface.NlMtu = mtu;
+        err = SetIpInterfaceEntry(&ipiface);
+    }
+
+    if (err != NO_ERROR)
+    {
+        msg(M_WARN, "TUN: Setting %s mtu failed: %s [status=%u if_index=%d]",
+            family_name, strerror_win32(err, &gc), err, iface_index);
+    }
+    else
+    {
+        msg(M_INFO, "Successfully set %s mtu on interface %d", family_name, iface_index);
+    }
 }
 
 /*

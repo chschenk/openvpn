@@ -1205,6 +1205,29 @@ HandleEnableDHCPMessage(const enable_dhcp_message_t *dhcp)
     return err;
 }
 
+static DWORD
+HandleMTUMessage(const set_mtu_message_t *mtu)
+{
+    DWORD err = 0;
+    MIB_IPINTERFACE_ROW ipiface;
+    InitializeIpInterfaceEntry(&ipiface);
+    ipiface.Family = mtu->family;
+    ipiface.InterfaceIndex = mtu->iface.index;
+    err = GetIpInterfaceEntry(&ipiface);
+    if (err != NO_ERROR)
+    {
+        return err;
+    }
+    if (mtu->family == AF_INET)
+    {
+        ipiface.SitePrefixLength = 0;
+    }
+    ipiface.NlMtu = mtu->mtu;
+
+    err = SetIpInterfaceEntry(&ipiface);
+    return err;
+}
+
 static VOID
 HandleMessage(HANDLE pipe, DWORD bytes, DWORD count, LPHANDLE events, undo_lists_t *lists)
 {
@@ -1217,6 +1240,7 @@ HandleMessage(HANDLE pipe, DWORD bytes, DWORD count, LPHANDLE events, undo_lists
         block_dns_message_t block_dns;
         dns_cfg_message_t dns;
         enable_dhcp_message_t dhcp;
+        set_mtu_message_t mtu;
     } msg;
     ack_message_t ack = {
         .header = {
@@ -1281,6 +1305,12 @@ HandleMessage(HANDLE pipe, DWORD bytes, DWORD count, LPHANDLE events, undo_lists
             if (msg.header.size == sizeof(msg.dhcp))
             {
                 ack.error_number = HandleEnableDHCPMessage(&msg.dhcp);
+            }
+            break;
+        case msg_set_mtu:
+            if (msg.header.size == sizeof(msg.mtu))
+            {
+                ack.error_number = HandleMTUMessage(&msg.mtu);
             }
             break;
 

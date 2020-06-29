@@ -251,7 +251,7 @@ do_set_mtu_service(const struct tuntap *tt, const short family, const int mtu)
     }
     else
     {
-        msg(M_INFO, "%s MTU set to %d on interface %d using service", family_name, mtu, mtu_msg.iface.index);
+        msg(M_INFO, "%s MTU set to %d on interface %d using SetIpInterfaceEntry()", family_name, mtu, mtu_msg.iface.index);
         ret = true;
     }
 
@@ -5516,7 +5516,7 @@ windows_set_mtu(const int iface_index, const short family,
     }
     else
     {
-        msg(M_INFO, "Successfully set %s mtu on interface %d", family_name, iface_index);
+        msg(M_INFO, "%s MTU set to %d on interface %d using SetIpInterfaceEntry()", family_name, mtu, iface_index);
     }
 }
 
